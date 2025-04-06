@@ -11,7 +11,16 @@ const {
 } = require("./src/database/database");
 const http = require("http");
 
-// Add these at the top of your index.js file, after requires
+// Create a new client instance first
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+});
+
+// Add error handlers after client is initialized
 process.on("unhandledRejection", (error) => {
   console.error("Unhandled promise rejection:", error);
 });
@@ -64,15 +73,6 @@ client.on("disconnect", (event) => {
       console.error("Failed to reconnect after disconnect:", err);
     });
   }, 5000);
-});
-
-// Create a new client instance
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
 });
 
 // Initialize commands collection
