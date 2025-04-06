@@ -16,12 +16,54 @@ process.on("unhandledRejection", (error) => {
   console.error("Unhandled promise rejection:", error);
 });
 
+// Modify the SIGTERM handler
 process.on("SIGTERM", () => {
-  console.log("SIGTERM received. Shutting down gracefully.");
+  console.log("SIGTERM received. Attempting to reconnect...");
+
+  // Instead of exiting immediately, try to reconnect
+  if (client) {
+    try {
+      // Only destroy the client if it's in a connected state
+      if (client.isReady()) {
+        client.destroy();
+
+        // Attempt to reconnect after a short delay
+        setTimeout(() => {
+          console.log("Attempting to reconnect to Discord...");
+          client.login(process.env.DISCORD_TOKEN).catch((err) => {
+            console.error("Failed to reconnect after SIGTERM:", err);
+          });
+        }, 5000);
+      }
+    } catch (error) {
+      console.error("Error during SIGTERM handling:", error);
+    }
+  }
+
+  // Don't exit the process - let Render restart if needed
+  // We'll try to reconnect instead
+});
+
+// Add handler for SIGINT (ctrl+c in terminal)
+process.on("SIGINT", () => {
+  console.log("SIGINT received. Shutting down gracefully.");
   if (client && client.destroy) {
     client.destroy();
   }
   process.exit(0);
+});
+
+// Add reconnection logic when Discord connection is lost
+client.on("disconnect", (event) => {
+  console.log(
+    `Bot disconnected with code ${event.code}. Attempting to reconnect...`
+  );
+
+  setTimeout(() => {
+    client.login(process.env.DISCORD_TOKEN).catch((err) => {
+      console.error("Failed to reconnect after disconnect:", err);
+    });
+  }, 5000);
 });
 
 // Create a new client instance
@@ -159,7 +201,10 @@ module.exports = { client };
 // Create a simple HTTP server to keep the bot alive on Render
 const server = http.createServer((req, res) => {
   res.writeHead(200);
-  res.end("Discord bot is running!");
+  const status = client && client.isReady() ? "online" : "reconnecting";
+  res.end(
+    `Discord bot is ${status}! Uptime: ${Math.floor(process.uptime())} seconds`
+  );
 });
 
 // Get the port from the environment or use 3000 as default
@@ -167,3 +212,23 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
+// Set up a periodic ping to keep the bot alive
+setInterval(() => {
+  console.log(`Bot heartbeat: ${new Date().toISOString()}`);
+  // Make a health check request to our own server
+  try {
+    const pingReq = http.request({
+      hostname: "localhost",
+      port: PORT,
+      path: "/",
+      method: "GET",
+    });
+    pingReq.on("error", (err) => {
+      console.error("Error pinging self:", err);
+    });
+    pingReq.end();
+  } catch (err) {
+    console.error("Failed to create self-ping request:", err);
+  }
+}, 5 * 60 * 1000); // Every 5 minutes
