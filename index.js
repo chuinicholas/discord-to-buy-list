@@ -10,6 +10,19 @@ const {
   saveUserData,
 } = require("./src/database/database");
 
+// Add these at the top of your index.js file, after requires
+process.on("unhandledRejection", (error) => {
+  console.error("Unhandled promise rejection:", error);
+});
+
+process.on("SIGTERM", () => {
+  console.log("SIGTERM received. Shutting down gracefully.");
+  if (client && client.destroy) {
+    client.destroy();
+  }
+  process.exit(0);
+});
+
 // Create a new client instance
 const client = new Client({
   intents: [
@@ -135,3 +148,9 @@ cron.schedule("0 9 * * *", async () => {
 
 // Login to Discord with your client's token
 client.login(process.env.DISCORD_TOKEN);
+
+// Add this near the end of your file, after client login
+console.log("Bot is starting up...");
+
+// Also export the client for potential use in the API endpoint
+module.exports = { client };
