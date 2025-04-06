@@ -26,7 +26,7 @@ process.on("unhandledRejection", (error) => {
 });
 
 // Modify the SIGTERM handler
-process.on("SIGTERM", () => {
+process.on("SIGTERM", async () => {
   console.log("SIGTERM received. Attempting to reconnect...");
 
   // Instead of exiting immediately, try to reconnect
@@ -34,18 +34,65 @@ process.on("SIGTERM", () => {
     try {
       // Only destroy the client if it's in a connected state
       if (client.isReady()) {
+        // Store connection status before destroying
+        const wasReady = client.isReady();
+        const connectedGuilds = client.guilds.cache.size;
+
+        console.log(
+          `Disconnecting from Discord (connected to ${connectedGuilds} servers)`
+        );
         client.destroy();
 
         // Attempt to reconnect after a short delay
-        setTimeout(() => {
+        setTimeout(async () => {
           console.log("Attempting to reconnect to Discord...");
-          client.login(process.env.DISCORD_TOKEN).catch((err) => {
-            console.error("Failed to reconnect after SIGTERM:", err);
-          });
+          try {
+            await client.login(process.env.DISCORD_TOKEN);
+            console.log(
+              `Successfully reconnected to Discord! Connected to ${client.guilds.cache.size} servers.`
+            );
+
+            // Force refresh of all event handlers if needed
+            console.log(
+              "Reconnection complete - bot should be fully operational"
+            );
+          } catch (loginErr) {
+            console.error("Failed to reconnect after SIGTERM:", loginErr);
+
+            // Try one more time after a longer delay
+            setTimeout(async () => {
+              try {
+                console.log("Making second reconnection attempt...");
+                await client.login(process.env.DISCORD_TOKEN);
+                console.log("Second reconnection attempt successful!");
+              } catch (err) {
+                console.error("Second reconnection attempt failed:", err);
+              }
+            }, 10000);
+          }
         }, 5000);
+      } else {
+        console.log("Client wasn't ready, attempting fresh login");
+        try {
+          await client.login(process.env.DISCORD_TOKEN);
+          console.log("Fresh login successful!");
+        } catch (err) {
+          console.error("Fresh login failed:", err);
+        }
       }
     } catch (error) {
       console.error("Error during SIGTERM handling:", error);
+
+      // Last resort - try a completely fresh login
+      setTimeout(async () => {
+        try {
+          console.log("Attempting emergency reconnection...");
+          await client.login(process.env.DISCORD_TOKEN);
+          console.log("Emergency reconnection successful!");
+        } catch (err) {
+          console.error("Emergency reconnection failed:", err);
+        }
+      }, 15000);
     }
   }
 
@@ -213,22 +260,95 @@ server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
 
-// Set up a periodic ping to keep the bot alive
-setInterval(() => {
-  console.log(`Bot heartbeat: ${new Date().toISOString()}`);
-  // Make a health check request to our own server
-  try {
-    const pingReq = http.request({
-      hostname: "localhost",
-      port: PORT,
-      path: "/",
-      method: "GET",
-    });
-    pingReq.on("error", (err) => {
-      console.error("Error pinging self:", err);
-    });
-    pingReq.end();
-  } catch (err) {
-    console.error("Failed to create self-ping request:", err);
+// Set up a more robust periodic ping to keep the bot alive
+const pingInterval = 4 * 60 * 1000; // Every 4 minutes (Render free tier has a 5 minute timeout)
+let pingTimer;
+
+function setupHeartbeat() {
+  // Clear any existing timer
+  if (pingTimer) {
+    clearInterval(pingTimer);
   }
-}, 5 * 60 * 1000); // Every 5 minutes
+
+  // Set up a new heartbeat
+  pingTimer = setInterval(() => {
+    const timestamp = new Date().toISOString();
+    const isConnected = client && client.isReady();
+    console.log(
+      `Bot heartbeat at ${timestamp} - Discord connection: ${
+        isConnected ? "CONNECTED" : "DISCONNECTED"
+      }`
+    );
+
+    // If disconnected, try to reconnect
+    if (!isConnected && client) {
+      console.log(
+        "Detected disconnection during heartbeat, attempting to reconnect..."
+      );
+      client
+        .login(process.env.DISCORD_TOKEN)
+        .then(() => console.log("Heartbeat reconnection successful!"))
+        .catch((err) => console.error("Heartbeat reconnection failed:", err));
+    }
+
+    // Make a health check request to our own server
+    try {
+      const pingReq = http.request({
+        hostname: "localhost",
+        port: PORT,
+        path: "/",
+        method: "GET",
+        timeout: 10000, // 10 second timeout
+      });
+
+      pingReq.on("response", (res) => {
+        console.log(`Self-ping successful, status: ${res.statusCode}`);
+      });
+
+      pingReq.on("error", (err) => {
+        console.error("Error pinging self:", err);
+      });
+
+      pingReq.on("timeout", () => {
+        console.error("Self-ping request timed out");
+        pingReq.destroy();
+      });
+
+      pingReq.end();
+    } catch (err) {
+      console.error("Failed to create self-ping request:", err);
+    }
+
+    // Also try to ping the public URL if available
+    if (process.env.PUBLIC_URL) {
+      try {
+        const urlParts = new URL(process.env.PUBLIC_URL);
+        const publicReq = http.request({
+          hostname: urlParts.hostname,
+          port: urlParts.port || 80,
+          path: urlParts.pathname || "/",
+          method: "GET",
+          timeout: 10000,
+        });
+
+        publicReq.on("error", (err) => {
+          console.error("Error pinging public URL:", err);
+        });
+
+        publicReq.end();
+      } catch (err) {
+        console.error("Failed to ping public URL:", err);
+      }
+    }
+  }, pingInterval);
+
+  console.log(
+    `Heartbeat system set up, will ping every ${pingInterval / 1000} seconds`
+  );
+}
+
+// Start heartbeat after bot is logged in
+client.once("ready", () => {
+  console.log(`Bot is ready and logged in as ${client.user.tag}!`);
+  setupHeartbeat();
+});
