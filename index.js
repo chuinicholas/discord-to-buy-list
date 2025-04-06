@@ -9,6 +9,7 @@ const {
   getUserData,
   saveUserData,
 } = require("./src/database/database");
+const http = require("http");
 
 // Add these at the top of your index.js file, after requires
 process.on("unhandledRejection", (error) => {
@@ -154,3 +155,15 @@ console.log("Bot is starting up...");
 
 // Also export the client for potential use in the API endpoint
 module.exports = { client };
+
+// Create a simple HTTP server to keep the bot alive on Render
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("Discord bot is running!");
+});
+
+// Get the port from the environment or use 3000 as default
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
